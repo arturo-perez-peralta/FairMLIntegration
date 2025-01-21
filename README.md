@@ -10,6 +10,10 @@ This notebook implements multistage and logical processors. The results are stor
 
 This notebook processes the results of the `Processors.ipynb` and produces the visualizations of the paper. The figures are saved in `results/Figures`.
 
+### `utils.py`
+
+Auxiliary functions neccessary for the correct use of `Processors.ipynb`.
+
 ### Python Version
 The code is designed to work with Python 3.9.18.
 It is important to ensure that the correct Python version is installed to avoid compatibility issues.
