@@ -15,7 +15,7 @@ This notebook processes the results of the `Processors.ipynb` and produces the v
 Auxiliary functions neccessary for the correct use of `Processors.ipynb`.
 
 ### Python Version
-The code is designed to work with Python 3.9.18.
+The code is designed to work with **Python 3.9.18**.
 It is important to ensure that the correct Python version is installed to avoid compatibility issues.
 
 ### Installing Dependencies
