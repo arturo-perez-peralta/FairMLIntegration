@@ -1,0 +1,17 @@
+# --- Data treatment ---
+scipy==1.8.1
+numpy==1.24.3
+pandas==2.1.4
+
+# --- Machine learning ---
+tensorflow==2.10.0
+sklearn==1.5.2
+xgboost==2.1.1
+
+# --- Fairness ---
+aif360==0.6.1
+
+# --- Plotting ---
+matplotlib==3.9.2
+seaborn==0.13.2
+networkx==3.2.1
