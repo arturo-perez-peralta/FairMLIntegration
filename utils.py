@@ -130,11 +130,14 @@ def update_dataset_from_model(dataset, model, class_thresh=0.5):
     # Create copy of dataset
     dataset_pred = dataset.copy(deepcopy=True)
 
-    # obtain the position of the favorable index
-    pos_ind = np.where(model.classes_ == dataset_pred.favorable_label)[0][0]
-
     # Obtain prob. scores from model for positive index
-    y_pred_prob = model.predict_proba(dataset_pred.features)[:, pos_ind]
+    try:
+        # obtain the position of the favorable index
+        pos_ind = np.where(model.classes_ == dataset_pred.favorable_label)[0][0]
+        y_pred_prob = model.predict_proba(dataset_pred.features)[:, pos_ind]
+    except:
+        y_pred_prob = model.predict(dataset_pred).scores
+    
     # Obtain predicted labels according to class_threshold
     y_pred = np.zeros_like(dataset_pred.labels)
     y_pred[y_pred_prob >= class_thresh] = dataset_pred.favorable_label
@@ -190,20 +193,18 @@ def update_german_dataset_from_multiple_protected_attributes(dataset, operation 
                                            {1.0: 'Old', 0.0: 'Young'}]})
     
     if operation == "OR":
-        # do an OR summation of age and sex
-        new_protected_attrs = ~(np.sum(dataset_german_multi_protected_attr.protected_attributes, axis = 1) == 0)
+        # do OR of age and sex
+        new_protected_attrs = (np.sum(dataset_german_multi_protected_attr.protected_attributes, axis = 1) == 2)
         new_protected_attrs = new_protected_attrs.astype(int).reshape(shape_protected_attribute)
 
     elif operation == "AND":
-        # do an AND product of age and sex
-        new_protected_attrs = ~(np.prod(dataset_german_multi_protected_attr.protected_attributes, axis = 1) == 0)
+        # do AND of age and sex
+        new_protected_attrs = ~(np.sum(dataset_german_multi_protected_attr.protected_attributes, axis = 1) == 0)
         new_protected_attrs = new_protected_attrs.astype(int).reshape(shape_protected_attribute)
 
     elif operation == "XOR":
         # do XOR of age and sex
-        orSum = ~(np.sum(dataset_german_multi_protected_attr.protected_attributes, axis = 1) == 0)
-        andProd = ~(np.prod(dataset_german_multi_protected_attr.protected_attributes, axis = 1) == 0)
-        new_protected_attrs = orSum - andProd
+        new_protected_attrs = (np.sum(dataset_german_multi_protected_attr.protected_attributes, axis = 1) != 1)
         new_protected_attrs = new_protected_attrs.astype(int).reshape(shape_protected_attribute)
     
     # add protected attribute to datacopy 
@@ -524,7 +525,7 @@ def metrics_postprocessing_threshold_sweep_from_scores(dataset_true, dataset_pre
     return metric_arrs
 
 
-def describe_metrics(metrics):
+def describe_metrics(metrics, measurement = 'bal_acc', combination = []):
     """
     Prints and returns the metrics for the best threshold on `thresh_arr`.
     Args:
@@ -533,7 +534,10 @@ def describe_metrics(metrics):
     Return:
         Dictionary where metrics are keys and values are the best values for the threshold sweep
     """
-    best_ind = np.argmax(metrics['bal_acc'])
+    if measurement == 'combination':
+        best_ind = np.argmax(metrics[combination[0]] + metrics[combination[1]])
+    else: 
+        best_ind = np.argmax(metrics[measurement])
     best_metrics = dict()
     # PER THRESHOLD METRICS
     best_metrics['best_threshold'] = metrics['thresh_arr'][best_ind]
@@ -577,6 +581,325 @@ def print_metrics(best_metrics):
     print("Separation ( |ΔFPR + ΔFNR|/2 ): {:6.4f}".format(separation))
     print("Sufficiency ( |ΔPPV| ) : {:6.4f}".format(sufficiency))
 
+
+
+
+
+# METRICS MULTIPLE SENSIBLE VARIABLES ----------------------------------------------------------------------------------
+
+
+def metrics_threshold_sweep_mult(dataset, dataset_single, model, thresh_arr):
+    """
+    Computes a pletora of perfomance metrics of a (fairness) model on a dataset over an array of score thresholds.
+    Args:
+        dataset1 (StandardDataset): dataset with classes in the aif360 format (one sensible attribute).
+        dataset_single (StandardDataset): dataset with classes in the aif360 format (multiple sensible variables).
+        model: aif360 or sklearn trained classifier.
+        thresh_arr (list): List of thresholds to sweep the metrics through.
+    Returns:
+        dict: Dictionary of metrics where keys are metrics and values are arrays with the metric value over
+        `thresh_arr`.
+    """
+    try:
+        # sklearn classifier
+        y_val_pred_prob = model.predict_proba(dataset.features)
+        pos_ind = np.where(model.classes_ == dataset.favorable_label)[0][0]
+    except AttributeError:
+        # aif360 inprocessing algorithm
+        y_val_pred_prob = model.predict(dataset).scores
+        pos_ind = 0
+
+    # Remove nans and turn them into score of random prediction (R=0.5)
+    y_val_pred_prob = np.nan_to_num(y_val_pred_prob, nan=0.5)
+
+    privileged_groups, unprivileged_groups = get_privileged_groups(dataset_single)
+
+    metric_arrs = defaultdict(list)
+    # include threshol array and predictions scores into metric_arrs
+    metric_arrs['thresh_arr'] = thresh_arr
+    metric_arrs['y_pred_probs'] = y_val_pred_prob[:, pos_ind]
+    metric_arrs['y_true'] = dataset.labels
+
+    FPR, TPR, _ = roc_curve(metric_arrs['y_true'], metric_arrs['y_pred_probs'], pos_label=dataset_single.favorable_label)
+    metric_arrs['auc'] = auc(FPR, TPR)
+
+    for thresh in thresh_arr:
+        dataset_pred = update_dataset_from_scores(dataset_single, y_val_pred_prob[:, pos_ind], thresh)
+
+        metric = ClassificationMetric(
+            dataset_single, dataset_pred,
+            unprivileged_groups=unprivileged_groups,
+            privileged_groups=privileged_groups)
+
+        independence = np.abs(metric.statistical_parity_difference())
+        separation = np.abs(metric.false_positive_rate_difference() + metric.false_negative_rate_difference()) / 2
+        sufficiency = np.abs(metric.positive_predictive_value(True) - metric.positive_predictive_value(False))
+        metric_arrs['acc'].append(metric.accuracy())
+        metric_arrs['bal_acc'].append((metric.true_positive_rate() + metric.true_negative_rate()) / 2)
+        metric_arrs['independence'].append(independence)
+        metric_arrs['separation'].append(separation)
+        metric_arrs['sufficiency'].append(sufficiency)
+    return metric_arrs
+
+
+
+def compute_metrics_mult(dataset, dataset_single, model, threshold):
+    """
+    Computes a pletora of perfomance metrics of a (fairness) model on a dataset over an specific threshold.
+    This code is adapted to the case of multiple sensitive variables.
+    Args:
+        dataset (StandardDataset): dataset with classes in the aif360 format.
+        dataset_single (StandarDataset): dataset with classes in the aif360 format and just one of the two sensitive variables.
+        model: aif360 or sklearn trained classifier.
+        threshold (float): threshold for the metric computation
+    Returns:
+        dict: Dictionary of metrics where keys are metrics
+    """
+    try:
+        # sklearn classifier
+        y_val_pred_prob = model.predict_proba(dataset.features)
+        pos_ind = np.where(model.classes_ == dataset.favorable_label)[0][0]
+    except AttributeError:
+        # aif360 inprocessing algorithm
+        y_val_pred_prob = model.predict(dataset).scores
+        pos_ind = 0
+
+
+    # Remove nans and turn them into score of random prediction (R=0.5)
+    y_val_pred_prob = np.nan_to_num(y_val_pred_prob, nan=0.5)
+
+    privileged_groups, unprivileged_groups = get_privileged_groups(dataset_single)
+
+    metric_dict = defaultdict()
+    # include threshol into metric_dict
+    metric_dict['best_threshold'] = threshold
+
+    y_pred_probs = y_val_pred_prob[:, pos_ind]
+    y_true = dataset.labels
+
+    fpr, tpr, _ = roc_curve(y_true, y_pred_probs, pos_label=dataset_single.favorable_label)
+
+    dataset_pred = update_dataset_from_scores(dataset_single, y_val_pred_prob[:, pos_ind], threshold)
+
+    metric = ClassificationMetric(
+        dataset_single, dataset_pred,
+        unprivileged_groups=unprivileged_groups,
+        privileged_groups=privileged_groups)
+
+    metric_dict['bal_acc'] = (metric.true_positive_rate() + metric.true_negative_rate()) / 2
+    metric_dict['acc'] = metric.accuracy()
+    metric_dict['independence'] = np.abs(metric.statistical_parity_difference())
+    metric_dict['separation'] = np.abs(
+        metric.false_positive_rate_difference() + metric.false_negative_rate_difference()) / 2
+    metric_dict['sufficiency'] = np.abs(
+        metric.positive_predictive_value(True) - metric.positive_predictive_value(False))
+    metric_dict['auc'] = auc(fpr, tpr)
+    return metric_dict
+
+
+
+def compute_metrics_postprocessing_mult(dataset_true, dataset_preds, dataset_true_single, model, threshold=None, required_threshold=True,
+                                   scores_or_labels='scores'):
+    """
+    Computes a pletora of perfomance metrics of a postprocessing model on a dataset over an array of score thresholds.
+    Args:
+        dataset_true (StandardDataset): dataset with classes in the aif360 format.
+        dataset_preds (StandardDataset): dataset with classes in the aif360 format.
+        dataset_true_single (StandardDataset): dataset with classes in the aif360 format.
+        model: aif360 or sklearn trained classifier.
+        threshold (float): List of thresholds to sweep the metrics through.
+        required_threshold (Boolean): Boolean indicating if threshold is required. Methodologies lke RejectOption do not
+                                      require thresholds because these are already implemented within the methodology
+        scores_or_labels (string): string indicating if sweep should be done considering scores or labels
+    Returns:
+        dict: Dictionary of metrics where keys are metrics and values are floats with the metric value for
+        `threshold`.
+    """
+
+    privileged_groups, unprivileged_groups = get_privileged_groups(dataset_true_single)
+
+    # define metric_arrs
+    metrics_best_thresh = defaultdict()
+
+    metrics_best_thresh['best_threshold'] = threshold
+
+    FPR, TPR, _ = roc_curve(dataset_true.labels, dataset_preds.scores, pos_label=dataset_true.favorable_label)
+    metrics_best_thresh['auc'] = auc(FPR, TPR)
+
+    if scores_or_labels == 'scores' and required_threshold is True:
+        dataset_preds_trans = dataset_true_single.copy(deepcopy = True)
+        dataset_preds_trans.labels = model.predict(dataset_preds, threshold).labels
+    elif scores_or_labels == 'labels' and required_threshold is True:
+        dataset_preds = update_dataset_from_scores(dataset_preds, dataset_preds.scores, threshold)
+        dataset_preds_trans = dataset_true_single.copy(deepcopy = True)
+        dataset_preds_trans.labels = model.predict(dataset_preds).labels
+    elif required_threshold is False:
+        metrics_best_thresh['best_threshold'] = model.classification_threshold
+        dataset_preds_trans = dataset_true_single.copy(deepcopy = True)
+        dataset_preds_trans.labels = model.predict(dataset_preds).labels
+    else:
+        raise ValueError('Invalid value for parameter scores_or_labels or required_threshold.')
+
+    metric = ClassificationMetric(
+        dataset_true_single, dataset_preds_trans,
+        unprivileged_groups=unprivileged_groups,
+        privileged_groups=privileged_groups)
+
+    metrics_best_thresh['acc'] = metric.accuracy()
+    metrics_best_thresh['bal_acc'] = (metric.true_positive_rate() + metric.true_negative_rate()) / 2
+    metrics_best_thresh['independence'] = np.abs(metric.statistical_parity_difference())
+    metrics_best_thresh['separation'] = np.abs( metric.false_positive_rate_difference() + metric.false_negative_rate_difference()) / 2
+    metrics_best_thresh['sufficiency'] = np.abs(metric.positive_predictive_value(True) - metric.positive_predictive_value(False))
+
+    return metrics_best_thresh
+
+
+
+def update_dataset_from_model_mult(dataset, dataset_single, model, class_thresh=0.5):
+    """
+    Returns a copy of `dataset` with updated scores and labels predicted by `model`
+    Args:
+        dataset (StandardDataset): A StandardDataset
+        dataset_single (StandardDataset): A StandardDataset
+        model: must have `predict_proba()` and `classes_` instances.
+        class_thresh (float): A numeric threshold for prediction
+    Returns:
+        Dataset with updated scores and labels
+    TODO: Obtain model with best `class_thresh` automatically (only relevant for EqOddsPostprocessing).
+    """
+
+    # Create copy of dataset
+    dataset_pred = dataset.copy(deepcopy=True)
+    dataset_pred_single = dataset_single.copy(deepcopy=True)
+
+    # Obtain prob. scores from model for positive index
+    try:
+        # obtain the position of the favorable index
+        pos_ind = np.where(model.classes_ == dataset_pred.favorable_label)[0][0]
+        y_pred_prob = model.predict_proba(dataset_pred.features)[:, pos_ind]
+    except:
+        y_pred_prob = model.predict(dataset_pred).scores
+    
+    # Obtain predicted labels according to class_threshold
+    y_pred = np.zeros_like(dataset_pred.labels)
+    y_pred[y_pred_prob >= class_thresh] = dataset_pred.favorable_label
+    y_pred[~(y_pred_prob >= class_thresh)] = dataset_pred.unfavorable_label
+
+    # Update dataset scores and labels
+    dataset_pred.scores = y_pred_prob.reshape(-1, 1)
+    dataset_pred.labels = y_pred
+
+    dataset_pred_single.scores = y_pred_prob.reshape(-1, 1)
+    dataset_pred_single.labels = y_pred
+
+    return dataset_pred, dataset_pred_single
+
+
+def metrics_postprocessing_threshold_sweep_mult(dataset_true, dataset_preds, dataset_true_single, model, thresh_arr, scores_or_labels='scores'):
+    """
+    Computes a pletora of perfomance metrics of a postprocessing model on a dataset over an array of score thresholds.
+    Args:
+        dataset_true (StandardDataset): dataset with classes in the aif360 format.
+        dataset_preds (StandardDataset): dataset with classes in the aif360 format.
+        dataset_true_single (StandardDataset): dataset with classes in the aif360 format.
+        model: aif360 or sklearn trained classifier.
+        thresh_arr (list): List of thresholds to sweep the metrics through.
+        scores_or_labels (string): string indicating if sweep should be done considering scores or labels
+    Returns:
+        dict: Dictionary of metrics where keys are metrics and values are arrays with the metric value over
+        `thresh_arr`.
+    """
+    privileged_groups, unprivileged_groups = get_privileged_groups(dataset_true_single)
+
+    # define metric_arrs
+    metric_arrs = defaultdict(list)
+    metric_arrs['thresh_arr'] = thresh_arr
+
+    FPR, TPR, _ = roc_curve(dataset_true.labels, dataset_preds.scores, pos_label=dataset_true.favorable_label)
+    metric_arrs['auc'] = auc(FPR, TPR)
+
+    for t in thresh_arr:
+        if scores_or_labels == 'scores':
+            dataset_preds_trans = dataset_true_single.copy(deepcopy = True)
+            dataset_preds_trans.labels = model.predict(dataset_preds, t).labels
+        elif scores_or_labels == 'labels':
+            dataset_preds = update_dataset_from_scores(dataset_preds, dataset_preds.scores, t)
+            dataset_preds_trans = dataset_true_single.copy(deepcopy = True)
+            dataset_preds_trans.labels = model.predict(dataset_preds).labels
+        else:
+            raise ValueError('Invalid value for parameter scores_or_labels. Valid values are: scores; labels')
+
+        metric = ClassificationMetric(
+            dataset_true_single, dataset_preds_trans,
+            unprivileged_groups=unprivileged_groups,
+            privileged_groups=privileged_groups
+        )
+
+        independence = np.abs(metric.statistical_parity_difference())
+        separation = np.abs(metric.false_positive_rate_difference() + metric.false_negative_rate_difference()) / 2
+        sufficiency = np.abs(metric.positive_predictive_value(True) - metric.positive_predictive_value(False))
+        metric_arrs['acc'].append(metric.accuracy())
+        metric_arrs['bal_acc'].append((metric.true_positive_rate() + metric.true_negative_rate()) / 2)
+        metric_arrs['independence'].append(independence)
+        metric_arrs['separation'].append(separation)
+        metric_arrs['sufficiency'].append(sufficiency)
+
+    return metric_arrs
+
+
+# TO DO
+def metrics_postprocessing_threshold_sweep_from_scores(dataset_true, dataset_preds, thresh_arr):
+    """
+    Computes a pletora of perfomance metrics on a predicted dataset with scores over an array of score thresholds.
+    Main difference with other `metrics_postprocessing_*` functions is that this doesn't require a model to sweep.
+    Relevant only for Platt Scaling since it doesn't use a single model (there is a model for each sensitive group)
+    Args:
+        dataset_true (StandardDataset): dataset with true classes in the aif360 format.
+        dataset_preds (StandardDataset): dataset with predicted scores in the aif360 format.
+        thresh_arr (list): List of thresholds to sweep the metrics through.
+    Returns:
+        dict: Dictionary of metrics where keys are metrics and values are arrays with the metric value over
+        `thresh_arr`.
+    """
+    privileged_groups, unprivileged_groups = get_privileged_groups(dataset_true)
+
+    # define metric_arrs
+    metric_arrs = defaultdict(list)
+    metric_arrs['thresh_arr'] = thresh_arr
+
+    # TODO: Do this better
+    FPR, TPR, _ = roc_curve(dataset_true.labels, dataset_preds.scores, pos_label=dataset_true.favorable_label)
+    metric_arrs['auc'] = auc(FPR, TPR)
+
+    for thresh in thresh_arr:
+        dataset_preds_updated = dataset_preds.copy(deepcopy=True)
+
+        # create predicted dataset
+        fav_inds = dataset_preds.scores > thresh
+        dataset_preds_updated.labels[fav_inds] = dataset_true.favorable_label
+        dataset_preds_updated.labels[~fav_inds] = dataset_true.unfavorable_label
+
+        metric = ClassificationMetric(dataset_true, dataset_preds_updated,
+                                      unprivileged_groups=unprivileged_groups,
+                                      privileged_groups=privileged_groups)
+
+        metric_arrs['acc'].append(metric.accuracy())
+        metric_arrs['bal_acc'].append((metric.true_positive_rate()
+                                       + metric.true_negative_rate()) / 2)
+
+        independence = np.abs(metric.statistical_parity_difference())
+        separation = np.abs(metric.false_positive_rate_difference() + metric.false_negative_rate_difference()) / 2
+        sufficiency = np.abs(metric.positive_predictive_value(True) - metric.positive_predictive_value(False))
+
+        metric_arrs['independence'].append(independence)
+        metric_arrs['separation'].append(separation)
+        metric_arrs['sufficiency'].append(sufficiency)
+        
+        # other metrics of interest
+        metric_arrs['avg_odds_diff'].append(metric.average_odds_difference())  # Separation
+        metric_arrs['eq_opp_diff'].append(metric.equal_opportunity_difference())  # Sufficiency
+        
+    return metric_arrs
 
 # PLOTTING -------------------------------------------------------------------------------------------------------------
 
@@ -675,7 +998,64 @@ def preprocess_homecredit(df):
                      'HOUSETYPE_MODE', 'WALLSMATERIAL_MODE', 'EMERGENCYSTATE_MODE']
 
     # OneHot encode the categorical variables
-    encoder = OneHotEncoder(handle_unknown='ignore', sparse=False, drop='first')
+    encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop='first')
+    encoded_array = encoder.fit_transform(df.loc[:, encoding_vars])
+    df_encoded = pd.DataFrame(encoded_array, columns=encoder.get_feature_names_out())
+    df_encoded = pd.concat([df, df_encoded], axis=1)
+    df_encoded = df_encoded.drop(labels=encoding_vars, axis=1)
+
+    return df_encoded
+
+
+def preprocess_homecredit_mult(df, operation = 'OR'):
+    """
+    Args:
+        df: trainset from the homecredit data competition (https://www.kaggle.com/c/home-credit-default-risk)
+    Returns:
+        df: The dataframe after preprocessing for filling missing data and one-hot encoding
+    """
+    # Identify character and numeric variables
+    char_vars = ['NAME_CONTRACT_TYPE', 'CODE_GENDER', 'FLAG_OWN_CAR', 'FLAG_OWN_REALTY', 'NAME_TYPE_SUITE',
+                 'NAME_INCOME_TYPE', 'NAME_EDUCATION_TYPE', 'NAME_FAMILY_STATUS', 'NAME_HOUSING_TYPE',
+                 'OCCUPATION_TYPE', 'WEEKDAY_APPR_PROCESS_START', 'ORGANIZATION_TYPE', 'FONDKAPREMONT_MODE',
+                 'HOUSETYPE_MODE', 'WALLSMATERIAL_MODE', 'EMERGENCYSTATE_MODE']
+    numeric_vars = [i for i in df.columns if i not in char_vars]
+
+    # NA values in OWN_CAR_AGE converted to 0: "no car"
+    df.loc[df['FLAG_OWN_CAR'] == "N", "OWN_CAR_AGE"] = 0
+
+    # NA values converted to median in numeric variables:
+    df[numeric_vars] = df[numeric_vars].fillna(df[numeric_vars].median())
+
+    # NA values converted to most frequent in categorical variables
+    df[char_vars] = df[char_vars].fillna(df[char_vars].mode().iloc[0])
+
+    # Conversion of age from days_from_birth to age (in years)
+    df['AGE'] = -df['DAYS_BIRTH'].astype('float') / 365
+
+    #Inclusion of prottected attribute
+    df.loc[:,'PROT_ATTR'] = 0.0
+    
+    if operation == 'OR':
+        condition = np.logical_or(df.loc[:, 'CODE_GENDER'] == 'M', df.loc[:, 'AGE'] >= 25)
+    elif operation == 'AND':
+        condition = np.logical_and(df.loc[:, 'CODE_GENDER'] == 'M', df.loc[:, 'AGE'] >= 25)
+    elif operation == 'XOR':
+        condition = np.logical_xor(df.loc[:, 'CODE_GENDER'] == 'M', df.loc[:, 'AGE'] >= 25)
+
+    df.loc[condition, 'PROT_ATTR'] = 1.0 
+
+
+    # Drop SK_ID_CURR: id column; DAYS_BIRTH: re-formated as AGE; CODE_GENDER: using AGE as sensitive atribute
+    df = df.drop(columns=['SK_ID_CURR', 'DAYS_BIRTH', 'CODE_GENDER'])
+
+    encoding_vars = ['NAME_CONTRACT_TYPE', 'FLAG_OWN_CAR', 'FLAG_OWN_REALTY', 'NAME_TYPE_SUITE',
+                     'NAME_INCOME_TYPE', 'NAME_EDUCATION_TYPE', 'NAME_FAMILY_STATUS', 'NAME_HOUSING_TYPE',
+                     'OCCUPATION_TYPE', 'WEEKDAY_APPR_PROCESS_START', 'ORGANIZATION_TYPE', 'FONDKAPREMONT_MODE',
+                     'HOUSETYPE_MODE', 'WALLSMATERIAL_MODE', 'EMERGENCYSTATE_MODE']
+
+    # OneHot encode the categorical variables
+    encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop='first')
     encoded_array = encoder.fit_transform(df.loc[:, encoding_vars])
     df_encoded = pd.DataFrame(encoded_array, columns=encoder.get_feature_names_out())
     df_encoded = pd.concat([df, df_encoded], axis=1)
