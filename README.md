@@ -10,6 +10,14 @@ This notebook implements multistage and logical processors. The results are stor
 
 This notebook processes the results of the `Processors.ipynb` and produces the visualizations of the paper. The figures are saved in `results/Figures`.
 
+### `SimulationStudy.py`
+
+Performs 50 instances of the Simulation Study.
+
+### `MassiveSimulationFigures.ipynb`
+
+Similar to `Figures.ipynb`. Handles the aggregated data of 50 simulations.
+
 ### `utils.py`
 
 Auxiliary functions neccessary for the correct use of `Processors.ipynb`.
