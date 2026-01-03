@@ -963,6 +963,162 @@ def plot_fairness_and_accuracy(metrics_dict, accuracy_metric='bal_acc',
 
 # PREPROCESSING DATA ---------------------------------------------------------------------------------------------------
 
+
+def preprocess_taiwan(df):
+    """
+    Args:
+        df: trainset from the taiwan dataset (https://archive.ics.uci.edu/dataset/350/default+of+credit+card+clients)
+    Returns:
+        df: The dataframe after preprocessing for filling missing data and one-hot encoding
+    """
+    # Identify character and numeric variables
+    df.rename(columns={'default payment next month': 'default'}, inplace=True)
+
+    cat_features = ['EDUCATION', 'MARRIAGE']
+
+    df['AGE'] = (df['AGE'] >= 25).astype(int)
+    df = df.drop(columns=['SEX'])
+
+    # OneHot encode the categorical variables
+    encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop='first')
+    encoded_array = encoder.fit_transform(df.loc[:, cat_features])
+    df_encoded = pd.DataFrame(encoded_array, columns=encoder.get_feature_names_out())
+    df_encoded = pd.concat([df, df_encoded], axis=1)
+    df_encoded = df_encoded.drop(labels=cat_features, axis=1)
+    df_encoded = df_encoded.loc[:, df_encoded.nunique() > 1]
+
+    return df_encoded
+
+
+def preprocess_taiwan_mult(df, operation = 'OR'):
+    """
+    Args:
+        df: trainset from the taiwan data competition (https://archive.ics.uci.edu/dataset/350/default+of+credit+card+clients)
+    Returns:
+        df: The dataframe after preprocessing for filling missing data and one-hot encoding
+    """
+    # Identify character and numeric variables
+    df.rename(columns={'default payment next month': 'default'}, inplace=True)
+
+    cat_features = ['EDUCATION', 'MARRIAGE']
+
+    df.loc[:,'PROT_ATTR'] = 0.0
+    
+    if operation == 'OR':
+        condition = np.logical_or(df.loc[:, 'SEX'] == 1, df.loc[:, 'AGE'] >= 25)
+    elif operation == 'AND':
+        condition = np.logical_and(df.loc[:, 'SEX'] == 1, df.loc[:, 'AGE'] >= 25)
+    elif operation == 'XOR':
+        condition = np.logical_xor(df.loc[:, 'SEX'] == 1, df.loc[:, 'AGE'] >= 25)
+
+    df.loc[condition, 'PROT_ATTR'] = 1.0 
+
+    df['AGE'] = (df['AGE'] >= 25).astype(int)
+
+    # Drop GENDER: using AGE as sensitive atribute
+    df = df.drop(columns=['SEX'])
+
+    # OneHot encode the categorical variables
+    encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop='first')
+    encoded_array = encoder.fit_transform(df.loc[:, cat_features])
+    df_encoded = pd.DataFrame(encoded_array, columns=encoder.get_feature_names_out())
+    df_encoded = pd.concat([df, df_encoded], axis=1)
+    df_encoded = df_encoded.drop(labels=cat_features, axis=1)
+    df_encoded = df_encoded.loc[:, df_encoded.nunique() > 1]
+
+    return df_encoded
+
+
+
+def preprocess_pakdd(df):
+    """
+    Args:
+        df: trainset from the taiwan dataset (https://pakdd.org/archive/pakdd2010/PAKDDCompetition.html)
+    Returns:
+        df: The dataframe after preprocessing for filling missing data and one-hot encoding
+    """
+
+    df = df.drop(columns=['CREDIT_AMNT'])
+    num_cols = ['QUANT_CARS', 'QUANT_SPECIAL_BANKING_ACCOUNTS', 'PERSONAL_MONTHLY_INCOME', 'MONTHS_IN_RESIDENCE']
+    cat_features = [feat for feat in df.columns if ((feat not in num_cols) and (feat not in ['AGE', 'BAD', 'SEX']))]
+
+    df = df.drop(columns=['SEX'])
+    df['BAD'] = (df['BAD'] == 'GOOD').astype(int)
+    df['AGE'] = (df['AGE'] >= 25).astype(int)
+
+    # OneHot encode the categorical variables
+    encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop='first')
+    encoded_array = encoder.fit_transform(df.loc[:, cat_features])
+    df_encoded = pd.DataFrame(encoded_array, columns=encoder.get_feature_names_out())
+    df_encoded = pd.concat([df, df_encoded], axis=1)
+    df_encoded = df_encoded.drop(labels=cat_features, axis=1)
+
+    return df_encoded
+
+
+def preprocess_pakdd_mult(df, operation = 'OR'):
+    """
+    Args:
+        df: trainset from the PAKDD data competition (https://pakdd.org/archive/pakdd2010/PAKDDCompetition.html)
+    Returns:
+        df: The dataframe after preprocessing for filling missing data and one-hot encoding
+    """
+    # Identify character and numeric variables
+    df = df.drop(columns=['CREDIT_AMNT'])
+    num_cols = ['QUANT_CARS', 'QUANT_SPECIAL_BANKING_ACCOUNTS', 'PERSONAL_MONTHLY_INCOME', 'MONTHS_IN_RESIDENCE']
+    cat_features = [feat for feat in df.columns if ((feat not in num_cols) and (feat not in ['AGE', 'BAD', 'SEX']))]
+    df['BAD'] = (df['BAD'] == 'GOOD').astype(int)
+    
+    df.loc[:,'PROT_ATTR'] = 0.0
+
+    if operation == 'OR':
+        condition = np.logical_or(df.loc[:, 'SEX'] == 'm', df.loc[:, 'AGE'] >= 25)
+    elif operation == 'AND':
+        condition = np.logical_and(df.loc[:, 'SEX'] == 'm', df.loc[:, 'AGE'] >= 25)
+    elif operation == 'XOR':
+        condition = np.logical_xor(df.loc[:, 'SEX'] == 'm', df.loc[:, 'AGE'] >= 25)
+
+    df.loc[condition, 'PROT_ATTR'] = 1.0 
+    df['AGE'] = (df['AGE'] >= 25).astype(int)
+
+    # Drop GENDER: using AGE as sensitive atribute
+    df = df.drop(columns=['SEX'])
+
+    # OneHot encode the categorical variables
+    encoder = OneHotEncoder(handle_unknown='ignore', sparse_output=False, drop='first')
+    encoded_array = encoder.fit_transform(df.loc[:, cat_features])
+    df_encoded = pd.DataFrame(encoded_array, columns=encoder.get_feature_names_out())
+    df_encoded = pd.concat([df, df_encoded], axis=1)
+    df_encoded = df_encoded.drop(labels=cat_features, axis=1)
+    df_encoded = df_encoded.loc[:, df_encoded.nunique() > 1]
+
+    return df_encoded
+
+
+def preprocess_gmsc(df):
+    df['BAD'] = df['BAD'] == 'GOOD'
+    return df
+
+
+def preprocess_gmsc_mult(df, operation = 'OR'):
+    df['BAD'] = df['BAD'] == 'GOOD'
+
+    df.loc[:,'PROT_ATTR'] = 0.0
+    if operation == 'OR':
+        condition = np.logical_or(df.loc[:, 'NoDependents'] == 0, df.loc[:, 'AGE'] >= 25)
+    elif operation == 'AND':
+        condition = np.logical_and(df.loc[:, 'NoDependents'] == 0, df.loc[:, 'AGE'] >= 25)
+    elif operation == 'XOR':
+        condition = np.logical_xor(df.loc[:, 'NoDependents'] == 0, df.loc[:, 'AGE'] >= 25)
+    df.loc[condition, 'PROT_ATTR'] = 1.0 
+    df['AGE'] = (df['AGE'] >= 25).astype(int)
+
+    df = df.drop(columns='NoDependents')
+    return
+
+
+
+
 def preprocess_homecredit(df):
     """
     Args:
@@ -1032,16 +1188,17 @@ def preprocess_homecredit_mult(df, operation = 'OR'):
 
     # Conversion of age from days_from_birth to age (in years)
     df['AGE'] = -df['DAYS_BIRTH'].astype('float') / 365
+    df['AGE'] = (df['AGE'] >= 25).astype(int)
 
     #Inclusion of prottected attribute
     df.loc[:,'PROT_ATTR'] = 0.0
     
     if operation == 'OR':
-        condition = np.logical_or(df.loc[:, 'CODE_GENDER'] == 'M', df.loc[:, 'AGE'] >= 25)
+        condition = np.logical_or(df.loc[:, 'CODE_GENDER'] == 'M', df.loc[:, 'AGE'] == 1)
     elif operation == 'AND':
-        condition = np.logical_and(df.loc[:, 'CODE_GENDER'] == 'M', df.loc[:, 'AGE'] >= 25)
+        condition = np.logical_and(df.loc[:, 'CODE_GENDER'] == 'M', df.loc[:, 'AGE'] == 1)
     elif operation == 'XOR':
-        condition = np.logical_xor(df.loc[:, 'CODE_GENDER'] == 'M', df.loc[:, 'AGE'] >= 25)
+        condition = np.logical_xor(df.loc[:, 'CODE_GENDER'] == 'M', df.loc[:, 'AGE'] == 1)
 
     df.loc[condition, 'PROT_ATTR'] = 1.0 
 
