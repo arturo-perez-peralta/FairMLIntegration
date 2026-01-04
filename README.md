@@ -37,6 +37,8 @@ To reproduce the environment used in this project, follow these steps:
      pip install -r requirements.txt
      ```
 ### Cite this work
+TBA
+<!---
 ```
 @misc{pérezperalta2025merrierlogicalmultistageprocessors,
       title={The more the merrier: logical and multistage processors in credit scoring}, 
@@ -48,3 +50,4 @@ To reproduce the environment used in this project, follow these steps:
       url={https://arxiv.org/abs/2503.23979}, 
 }
 ```
+-->
